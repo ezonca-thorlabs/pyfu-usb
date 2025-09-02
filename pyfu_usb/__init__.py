@@ -42,7 +42,7 @@ def _make_progress_bar(progress: Progress, total: int) -> Optional[TaskID]:
 
 
 def _get_dfu_devices(
-    vid: Optional[int] = None, pid: Optional[int] = None
+    vid: Optional[int] = None, pid: Optional[int] = None, backend = None
 ) -> List[usb.core.Device]:
     """Get USB devices in DFU mode.
 
@@ -69,7 +69,7 @@ def _get_dfu_devices(
                                 return True
             return False
 
-    return list(usb.core.find(find_all=True, custom_match=FilterDFU()))
+    return list(usb.core.find(find_all=True, custom_match=FilterDFU(), backend=backend))
 
 
 def _dfuse_download(
@@ -207,7 +207,7 @@ def _dfu_download(
         logger.warning("Ignoring USB error when exiting DFU: %s", err)
 
 
-def list_devices(vid: Optional[int] = None, pid: Optional[int] = None) -> None:
+def list_devices(vid: Optional[int] = None, pid: Optional[int] = None, backend = None) -> None:
     """List devices detected in DFU mode. For DfuSe devices, the memory layout
     will be listed as well.
 
@@ -215,7 +215,7 @@ def list_devices(vid: Optional[int] = None, pid: Optional[int] = None) -> None:
         vid: Vendor ID to narrow the search for DFU devices.
         pid: Product ID to narrow the search for DFU devices.
     """
-    for device in _get_dfu_devices(vid=vid, pid=pid):
+    for device in _get_dfu_devices(vid=vid, pid=pid, backend=backend):
         logger.info(
             "Bus {} Device {:03d}: ID {:04x}:{:04x}".format(
                 device.bus, device.address, device.idVendor, device.idProduct
@@ -252,6 +252,7 @@ def download(
     vid: Optional[int] = None,
     pid: Optional[int] = None,
     address: Optional[int] = None,
+    backend = None,
 ) -> None:
     """Download a file to the DFU device defined by vid:pid. If vid:pid is not
     provided and only one DFU device is present, that device will be used.
@@ -272,7 +273,7 @@ def download(
     with open(filename, "rb") as fin:
         data = fin.read()
 
-    devices = _get_dfu_devices(vid=vid, pid=pid)
+    devices = _get_dfu_devices(vid=vid, pid=pid, backend=backend)
 
     if not devices:
         raise RuntimeError("No devices found in DFU mode")
