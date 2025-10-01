@@ -21,7 +21,7 @@ _BYTES_PER_KILOBYTE = 1024
 logger = logging.getLogger(__name__)
 
 
-def _make_progress_bar(progress: Progress, total: int) -> Optional[TaskID]:
+def _make_progress_bar(progress: Progress, total: int, title: str = "") -> Optional[TaskID]:
     """Create task for rich progress bar, but only if logging level is not
     DEBUG since they would conflict on the output.
 
@@ -33,7 +33,7 @@ def _make_progress_bar(progress: Progress, total: int) -> Optional[TaskID]:
     """
     if logger.getEffectiveLevel() != logging.DEBUG:
         return progress.add_task(
-            "[blue]Downloading firmware",
+            f"[blue]{title}",
             total=total,
             start_task=False,
         )
@@ -78,6 +78,7 @@ def _dfuse_download(
     data: bytes,
     xfer_size: int,
     start_address: int,
+    alternate_interface: int,
 ) -> None:
     """Download data to DfuSe device.
 
@@ -88,26 +89,43 @@ def _dfuse_download(
         xfer_size: Transfer size to use when downloading.
         start_address: Start address of data in device memory.
     """
+
     for segment_num, segment in enumerate(
-        descriptor.get_memory_layout(dev, interface)
+        descriptor.get_memory_layout(dev, interface, alternate_interface)
     ):
+        
+        # Assemble list of pages that we need to erase
+        pages_to_erase = []
         for page_num in range(segment.num_pages):
             page_addr = segment.addr + page_num * segment.page_size
             if start_address <= page_addr <= start_address + len(data):
+                pages_to_erase.append(page_addr)
+
+        # Erase pages
+        progress = Progress()
+        with progress:
+            task = _make_progress_bar(progress, len(pages_to_erase), "Erasing")
+
+            for page_to_erase_addr in pages_to_erase:    
+                
                 logger.info(
-                    "Erasing page 0x%X of size %d in segment %d",
-                    page_addr,
+                    "Erasing page %X of size %d in segment %d",
+                    page_to_erase_addr,
                     segment.page_size,
                     segment_num,
                 )
 
-                dfuse.page_erase(dev, interface, page_addr)
+                dfuse.page_erase(dev, interface, page_to_erase_addr)
+
+                if task is not None:
+                    progress.update(task, advance=1)
 
     # Download data
     progress = Progress()
     with progress:
-        task = _make_progress_bar(progress, len(data))
+        task = _make_progress_bar(progress, len(data), "Downloading")
 
+        #print(f"Download address start is {hex(start_address)}")
         bytes_downloaded = 0
         while bytes_downloaded < len(data):
             chunk_size = min(xfer_size, len(data) - bytes_downloaded)
@@ -144,6 +162,7 @@ def _dfuse_download_with_retry(
     data: bytes,
     xfer_size: int,
     start_address: int,
+    alternate_interface: int,
 ) -> None:
     """Download data to DfuSe device, with a retry to clear any leftover status.
 
@@ -155,12 +174,12 @@ def _dfuse_download_with_retry(
         start_address: Start address of data in device memory.
     """
     try:
-        _dfuse_download(dev, interface, data, xfer_size, start_address)
+        _dfuse_download(dev, interface, data, xfer_size, start_address, alternate_interface)
     except usb.core.USBError as err:
         if "pipe error" in str(err).lower():
             logger.debug("Clearing status before DfuSe download")
             dfu.clear_status(dev, interface)
-            _dfuse_download(dev, interface, data, xfer_size, start_address)
+            _dfuse_download(dev, interface, data, xfer_size, start_address, alternate_interface)
         else:
             raise err
 
@@ -253,6 +272,7 @@ def download(
     pid: Optional[int] = None,
     address: Optional[int] = None,
     backend = None,
+    alternate_interface: int = 0,
 ) -> None:
     """Download a file to the DFU device defined by vid:pid. If vid:pid is not
     provided and only one DFU device is present, that device will be used.
@@ -297,9 +317,9 @@ def download(
             if address is None:
                 raise ValueError("Must provide address for DfuSe")
             _dfuse_download_with_retry(
-                dev, interface, data, dfu_desc.wTransferSize, address
+                dev, interface, data, dfu_desc.wTransferSize, address, alternate_interface
             )
         else:
-            _dfu_download(dev, interface, data, dfu_desc.wTransferSize)
+            _dfu_download(dev, interface, data, dfu_desc.wTransferSize, alternate_interface)
     finally:
         dfu.release_interface(dev)
